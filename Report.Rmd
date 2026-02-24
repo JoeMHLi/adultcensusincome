@@ -1,0 +1,418 @@
+---
+title: "Adult Census Income Project"
+subtitle: "HarvardX PH125.9x - Data Science: Capstone - Choose Your Own Project"
+author: "Joe Li Man Hon"
+date: "December 7, 2025"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.align="center", out.width="80%")
+
+```
+
+\newpage
+# 1. Introduction
+Predictive analysis plays a central role in machine learning and data science by turning historical data into actionable forecasts about future events and behaviors. It combines statistical modeling and machine learning algorithms to uncover patterns that support better decision-making in areas such as risk scoring, customer targeting, and demand forecasting. In practice, predictive models help organizations move from reactive reporting to proactive strategy, allowing them to anticipate outcomes and optimize interventions rather than simply describing what has already happened. This focus on foresight makes predictive analysis a key driver of value in data-driven projects across industries.
+
+This project exemplifies binary classification in machine learning by using the Adult Census Income dataset (hereinafter referred to as "the adult dataset") to predict whether an individual's annual income exceeds $50,000 beased on demographic like age, education, occupation and weekly work hours. The data was extracted from the 1994 Census bureau database by Ronny Kohavi and Barry Becker (Data Mining and Visualization, Silicon Graphics) [1]. 
+
+This report begins with exploratory data analysis utilizing common visualization methods, followed by descriptions on the development, training, and testing phases of the predictive algorithm. It then presents results from each model iteration and concludes with an evaluation of the overview of models' accuracy, its limitations, and potential areas for further improvement.
+
+In this project, the code was run, and the report was compiled using R Markdown in RStudio Version 2025.09.2+418.
+
+## 1.1 Evaluation of Algorithm
+This project divides the dataset into separate training and testing sets to ensure a robust evaluation of algorithm. The models will be trained on the training set and then evaluated by comparing its predictions to the actual outcomes in the testing set. Accuracy, defined as the proportion of correctly predicted instances, is used as the primary metric to assess the performance of the algorithm. This approach helps to gauge how well the model generalizes to unseen data and identifies potential areas for optimization.
+
+```{r download_data}
+# Download packages if needed
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org")
+if(!require(gridExtra)) install.packages("gridExtra", repos = "http://cran.us.r-project.org")
+
+# Load libraries needed
+library(tidyverse)
+library(caret)
+library(ggplot2)
+library(knitr)
+library(gridExtra)
+
+# Download the data into R environment
+dl <- "adult.csv"
+if(!file.exists(dl))
+  download.file("https://raw.githubusercontent.com/JoeLiMH/adultcensusincome/refs/heads/main/adult.csv", dl)
+
+adult <- read_csv(dl)
+
+# Save the data into a temporary object, keeping the raw data intact
+adult_tmp <- adult
+```
+
+## 1.2 Preprocessing and Partitioning
+
+### 1.2.1 Processing Question Marks
+The adult dataset consists of 4,262 question marks ("?") representing missing values across various features, for example `occupation`. To streamline downstream processing and enable standard R functions, these question marks are systematically replaced by `NA`. This preprocessing step ensures data integrity for exploratory analysis while facilitating the subsequent partitioning of the cleaned dataset into training and testing sets.
+
+```{r preprocessing_replacing_question_marks}
+# Replacing "?" by NA before partitioning
+adult_tmp[adult_tmp == "?"] <- NA
+```
+
+### 1.2.2 Near Zero Variance and Dimension Reduction
+During the preprocessing stage, near zero variance (NZV) predictors, that is, those with minimal unique values or skewed frequencies, are identified and removed to prevent model instability. The $nearZeroVar$ function identifies three variables: `capital.gain`, `captial.loss` and `native.country`. Among these variables, `capital.gain` has **91.7%** zeros, `capital.loss` **95.3%** zeros and `native.county` **89.6%** the United-States. Figure 1 below plots the disparity of these variables.
+
+```{r near_zero_variance}
+# Near Zero Variables
+nzv <- nearZeroVar(adult)
+```
+
+```{r plot_near_zero_variance, fig.cap = "Disparity in the Three Near Zero Variables"}
+# Plots to show Near Zero Variables
+p_capgain <- adult %>% 
+  ggplot(aes(capital.gain)) +
+  geom_histogram(bins = 3) 
+p_caploss <- adult %>% 
+  ggplot(aes(capital.loss)) +
+  geom_histogram(bins = 3)
+p_country <- adult %>% 
+  mutate(country = ifelse(native.country =="United-States", "United-States", "Non U.S.")) %>%
+  ggplot(aes(x = country)) +
+  geom_bar()
+grid.arrange(p_capgain, p_caploss, p_country, ncol=2)
+```
+
+```{r dimension_reduction}
+# Dimension Reduction: remove 3 columns - capital gain, capital loss and native.country 
+# Save the result in adult_r, where r denotes a reduced data set
+adult_r <- adult_tmp %>% 
+  select(-all_of(nzv))
+```
+
+### 1.2.3 Partitioning
+The adult dataset is partitioned into training and testing set. The training set (train_set) contains 80% (26,048 observations) of the adult data, while the testing set (test_set) 20% (6,513 observations).
+
+```{r partitioning}
+# Partitioning into 80% training set and 20% testing set of the adult data
+set.seed(2025)
+test_index <- createDataPartition(adult_r$income, times = 1, p = 0.2, list = FALSE)
+train_set <- adult_r[-test_index,]
+test_set <- adult_r[test_index,]
+
+# Remove used objects to free memory
+rm(dl, adult_tmp, nzv, adult_r, p_capgain, p_caploss, p_country, test_index)
+```
+
+# 2. Exploratory Data Analysis
+## 2.1 Overview on the dataset
+The `train_set` data frame comprises of 26,048 rows and 12 columns, derived from an 80/20 partition of the adult dataset. The target variable shows class imbalance, with **24.1%** of observations having annual income exceeding $50,000 and the remaining **75.9%** below that threshold.
+
+## 2.2 Plots about the dataset
+Further exploration reveals the distribution of `income >50K` versus `<=50K` across key categorical features, highlighting their predictive importance. Figures below show stacked bar plots created with `ggplot2::geom_bar(position = "fill")` for some of the features such as `sex`, `race`, `education`, `occupation`, `workclass` and `relationship`. These visualizations demonstrate stark disparities—for instance, males and certain education levels like "Bachelors" or higher show significantly higher proportions above the $50K threshold—informing feature selection and model interpretation.
+
+```{r stacked_barplots, fig.height = 15, fig.width = 9,fig.cap = "Distribution of Income"}
+# Sex Stacked barplot (descending order of proportion of >50K)
+tab <- train_set %>% count(sex, income)
+level_order <- tab %>%
+  filter(income == ">50K") %>%
+  arrange(-n) %>%
+  pull(sex)
+p_1 <- tab %>% mutate(sex = factor(sex, levels = level_order)) %>%
+  ggplot(aes(x = sex, y = n, fill = income)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  labs(x = "Sex", y = "Proportion")
+
+# Race Stacked barplot (descending order of proportion of >50K)
+tab <- train_set %>% 
+  count(race, income) %>% 
+  group_by(race) %>% 
+  mutate(pct = n / sum(n))
+level_order <- tab %>%
+  filter(income == ">50K") %>%
+  arrange(-pct) %>%
+  pull(race)
+p_2 <- tab %>% mutate(race = factor(race, levels = level_order)) %>%
+  ggplot(aes(x = race, y = n, fill = income)) +
+  geom_bar(stat = "identity", position = "fill") +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1)) +
+  labs(x = "Race", y = "Proportion")
+
+# Education Stacked barplot (descending order of education level)
+tab <- train_set %>% 
+  count(education, education.num, income) %>% 
+  group_by(education) %>% 
+  mutate(pct = n / sum(n))
+level_order <- tab %>%
+  filter(income == "<=50K") %>%
+  arrange(-education.num) %>%
+  pull(education)
+p_3 <- tab %>% mutate(education = factor(education, levels = level_order)) %>%
+  ggplot(aes(x = education, y = n, fill = income)) +
+  geom_bar(stat = "identity", position = "fill") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  labs(x = "Education", y = "Proportion")
+
+# Occupation Stacked barplot (descending order of proportion of >50K)
+tab <- train_set %>% 
+  count(occupation, income) %>% 
+  group_by(occupation) %>% 
+  mutate(pct = n / sum(n))
+level_order <- tab %>%
+  filter(income == ">50K") %>%
+  arrange(-pct) %>%
+  pull(occupation)
+p_4 <- tab %>% mutate(occupation = factor(occupation,, levels = level_order)) %>%
+  ggplot(aes(x = occupation, y = n, fill = income)) +
+  geom_bar(stat = "identity", position = "fill") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+  labs(x = "Occupation", y = "Proportion")
+
+# Workclass Stacked barplot (descending order of proportion of >50K)
+tab <- train_set %>% 
+  count(workclass, income) %>% 
+  group_by(workclass) %>% 
+  mutate(pct = n / sum(n))
+level_order <- tab %>%
+  filter(income == ">50K") %>%
+  arrange(-pct) %>%
+  pull(workclass)
+p_5 <- tab %>% mutate(workclass = factor(workclass,, levels = level_order)) %>%
+  ggplot(aes(x = workclass, y = n, fill = income)) +
+  geom_bar(stat = "identity", position = "fill") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+  labs(x = "Workclass", y = "Proportion")
+
+# Relationship Stacked barplot (descending order of proportion of >50K)
+tab <- train_set %>% 
+  count(relationship, income) %>% 
+  group_by(relationship) %>% 
+  mutate(pct = n / sum(n))
+level_order <- tab %>%
+  filter(income == ">50K") %>%
+  arrange(-pct) %>%
+  pull(relationship)
+p_6 <- tab %>% mutate(relationship = factor(relationship,, levels = level_order)) %>%
+  ggplot(aes(x = relationship, y = n, fill = income)) +
+  geom_bar(stat = "identity", position = "fill") +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1)) +
+  labs(x = "Relationship", y = "Proportion")
+
+grid.arrange(p_1, p_2, p_3, p_4, p_5, p_6, ncol=2)
+
+# Remove used objects to free memory
+rm(tab, level_order, p_1, p_2, p_3, p_4, p_5, p_6)
+```
+
+\newpage
+# 3. Methods
+## 3.1 Factor Encoding Categorical Variables
+The dataset contains many categorical data that the data frame itself considers them as characters. Categorical characters in the dataset are converted to factors using `as.factor()` to establish meaningful levels, then encoded to numeric via `as.numeric()` for machine learning compatibility. This label encoding preserves category order while creating integer representations suitable for models like kNN.
+
+```{r factor_encoding}
+# Factor encoding, where e refers to encoded
+train_e <- train_set %>% 
+  mutate(education = as.factor(education), 
+         workclass = as.factor(workclass), 
+         occupation =  as.factor(occupation),
+         marital.status = as.factor(marital.status),  
+         relationship = as.factor(relationship), 
+         race = as.factor(race),
+         sex = as.factor(sex)) %>%
+  mutate(education = as.numeric(education), 
+         workclass = as.numeric(workclass), 
+         occupation =  as.numeric(occupation),
+         marital.status = as.numeric(marital.status),  
+         relationship = as.numeric(relationship), 
+         race = as.numeric(race),
+         sex = as.numeric(sex))
+test_e <- test_set %>% 
+  mutate(education = as.factor(education), 
+         workclass = as.factor(workclass), 
+         occupation =  as.factor(occupation),
+         marital.status = as.factor(marital.status),  
+         relationship = as.factor(relationship), 
+         race = as.factor(race),
+         sex = as.factor(sex)) %>%
+  mutate(education = as.numeric(education), 
+         workclass = as.numeric(workclass), 
+         occupation =  as.numeric(occupation),
+         marital.status = as.numeric(marital.status),  
+         relationship = as.numeric(relationship), 
+         race = as.numeric(race),
+         sex = as.numeric(sex))
+```
+
+## 3.2 Random Guess
+The simplest prediction method randomly assigns predicted values to each observation without using any features. This random guess establishes a minimum performance threshold that all models must exceed to demonstrate predictive value beyond chance.
+
+```{r random_guess}
+# Predict by random guess
+preds_random <- sample(c("<=50K", ">50K"), nrow(test_e), replace = TRUE)
+# Random Guess Result
+acc_random <- mean(preds_random == test_e$income)
+tibble(method = "Random Guess", Accuracy = acc_random) %>% kable(col.names = c("Method", "Accuracy"))
+```
+
+## 3.3 Generalized Linear (GLM) Model
+Before training mathematical models like GLM, missing values must be addressed. Below reveals `NA`s in the columns `workclass` and `occupation` after replacing "?" values:
+
+```{r num_of_NAs}
+# Number of NAs in each column
+colSums(is.na(train_e))
+```
+
+To enable immediate model training, these columns are temporarily excluded from the feature set.
+
+```{r glm_model}
+# Train, without workclass and occupation, wherein NAs exist
+train_glm <- train(income ~ age + fnlwgt + education + marital.status + 
+                     relationship + race + sex + hours.per.week, method = "glm", data = train_e)
+preds_glm <- predict(train_glm, test_e)
+acc_glm <- mean(preds_glm == test_e$income)
+# Display result
+tibble(method = "GLM", Accuracy = acc_glm) %>% kable(col.names = c("Method", "Accuracy"))
+```
+
+## 3.4 LOESS Model
+Next, a LOESS (Local weighted regression) model is trained on the training set. 
+
+```{r loess_model}
+# Train, without workclass and occupation, wherein NAs exist
+train_loess <- train(income ~ age + fnlwgt + education + marital.status + 
+                       relationship + race + sex + hours.per.week, method = "gamLoess", data = train_e)
+preds_loess <- predict(train_loess, test_e)
+acc_loess <- mean(preds_loess == test_e$income)
+# Display result
+tibble(method = "LOESS", Accuracy = acc_loess) %>% kable(col.names = c("Method", "Accuracy"))
+```
+
+## 3.5 k-Nearest Neighbors (kNN) Model
+During tuning of the optimal k value, the accuracy curve exhibited a progressively increasing convex shape with k values rising up to 180 without reaching a clear peak (the lengthy computation omitted for brevity). This behavior stems from the extreme numeric range of the `fnlwgt` feature (10,000 to >1,000,000), which dwarfs other variables like `age` (16–90), dominating Euclidean distance calculations in kNN. Removing `fnlwgt` enabled efficient convergence on an optimal k. Notably, accuracy improved to around 0.796, versus 0.74–0.75 when including it, confirming that excluding `fnlwgt` enhances kNN performance on this dataset.
+
+```{r knn_model}
+# kNN without fnlwgt, workclass and occupation
+train_knn <- train(income ~ age + education + marital.status + 
+                     relationship + race + sex + hours.per.week, 
+                   method = "knn", 
+                   data = train_e,
+                   tuneGrid = data.frame(k = seq(20, 25, 1)))
+train_knn$bestTune
+ggplot(train_knn, hightlight = TRUE)
+
+preds_knn <- predict(train_knn, test_e)
+acc_knn <- mean(preds_knn == test_e$income)
+# Display result
+tibble(method = "kNN", Accuracy = acc_knn) %>% kable(col.names = c("Method", "Accuracy"))
+```
+
+## 3.6 Random Forest
+Next, a Random Forest model is trained with `mtry = 2` (number of randomly selected predictors per tree split).
+
+```{r rf_model}
+# Train, without workclass and occupation, wherein NAs exist, set mtry = 2
+train_rf <- train(income ~ age + fnlwgt + education + marital.status + 
+                     relationship + race + sex + hours.per.week, 
+                   method = "rf", 
+                   data = train_e,
+                   tuneGrid = data.frame(mtry = 2))
+preds_rf <- predict(train_rf, test_e)
+acc_rf <- mean(preds_rf == test_e$income)
+# Display result
+tibble(method = "Random Forest", Accuracy = acc_rf) %>% kable(col.names = c("Method", "Accuracy"))
+```
+
+## 3.7 Imputation and Random Forest with Imputation
+Recall that in section 3.3, `workclass` and `occupation` were omitted due to `NA` values. To handle missing data, here introduces data imputation. Data imputation is the clever process of filling in missing information in datasets so that the analysis stays accurate [2]. For categorical data like the adult dataset, usual techniques are mode imputation and kNN imputation [3]. However, exploring `occupation` shows the distribution of outcomes are very different from the most frequent `Exec-managerial` to `NA`; mode imputation distorts outcome distributions. 
+
+```{r dist_outcome}
+# Distribution of outcomes in the mode set and NA set
+train_set %>% mutate(occupation = ifelse(is.na(occupation), "Missing (NA)", as.character(occupation))) %>%
+  count(occupation, income) %>% 
+  group_by(occupation) %>% 
+  mutate(pct = round(n / sum(n) * 100, 2)) %>% 
+  ungroup() %>%
+  filter(occupation %in% c("Exec-managerial", "Missing (NA)")) %>% 
+  arrange(desc(n)) %>%
+  kable(col.names = c("Occupation", "Income", "Count", "Percentage"))
+```
+
+Therefore, kNN imputation is performed, using data from training set and then apply the result to both training and testing set, to correctly apply statistical missing data imputation and avoid data leakage [4]. Cross validation tunes the imputation k value.
+
+```{r knn_imputation}
+# Use kNN method to conduct imputation
+# Cross-validation for optimal k value for imputation
+train_df <- as.data.frame(train_e)
+k_values <- seq(5, 17, by = 2)
+accuracies <- numeric(length(k_values))
+
+for(i in seq_along(k_values)) {
+  pre_knn <- preProcess(train_df, method = "knnImpute", k = k_values[i])
+  train_knn <- predict(pre_knn, train_df)
+  
+  model <- train(income ~ ., 
+                 data = train_knn, 
+                 method = "rf",
+                 tuneGrid = data.frame(mtry = 2),
+                 trControl = trainControl(method = "cv", number = 5))
+  
+  accuracies[i] <- max(model$results$Accuracy)
+}
+best_k <- k_values[which.max(accuracies)]
+plot(k_values, accuracies, type = "b", 
+     xlab = "k", ylab = "CV Accuracy", 
+     main = "Optimal k for knnImpute")
+
+# Use the result to impute training and testing set, where i refers to imputed
+pre_knn <- preProcess(train_df, method = "knnImpute", k = best_k)
+train_i <- predict(pre_knn, train_df)
+test_i <- predict(pre_knn, as.data.frame(test_e))
+```
+
+Among the method used, the Random Forest has the highest accuracy, so the imputed training set will be trained with Random Forest.
+
+```{r random_forest_imputation}
+# Random Forest with Imputation
+# Train, with all features, set mtry = 2
+train_rf_all <- train(income ~ ., method = "rf", data = train_i, 
+                      tuneGrid = data.frame(mtry = 2))
+preds_rf_all <- predict(train_rf_all, test_i)
+acc_rf_all <- mean(preds_rf_all == test_e$income)
+# Display result
+tibble(method = "Random Forest with Imputation", Accuracy = acc_rf_all) %>% kable(col.names = c("Method", "Accuracy"))
+```
+
+\newpage
+# 4. Results
+Below table summarizes the accuracies resulting from the methods described in section 3 above:
+
+```{r summary_table}
+# Display the summary table of the methods
+tibble(Method = c("Random Guess", "GLM", "LOESS", "kNN", 
+                  "Random Forest", "Random Forest with Imputation"), 
+       Accuracy = c(acc_random, acc_glm, acc_loess, acc_knn, acc_rf, acc_rf_all)) %>%
+  kable(col.names = c("Method", "Accuracy"))
+```
+
+The final algorithm achieved accuracy at **0.84262**.
+
+# 5. Conclusion
+This project applies multiple machine learning techniques to predict income levels (`>50K` vs. `<=50K`) using the Adult Census Income dataset. Preprocessing identifies and removes near-zero variance features and partitions data into 80/20 training and testing sets. Exploratory analysis reveals key disparities across demographic features, visualized through stacked bar plots. Various models are evaluated: random guess baseline, GLM, LOESS, kNN, and Random Forest achieving highest accuracy. 
+
+Regarding future improvement, the code in this project takes time; improvement on computing time should be sought. Also there is another method to handle relative large numerical feature (in this data, `fnlwgt`) called "scaling", which can be further explored in the future.
+
+# References
+
+[1] https://www.kaggle.com/datasets/uciml/adult-census-income
+
+[2] https://blog.mitsde.com/data-imputation-techniques-handling-missing-data-in-machine-learning/
+
+[3] same as above
+
+[4] https://machinelearningmastery.com/statistical-imputation-for-missing-values-in-machine-learning/
+
+Irizarry, Rafael A., Introduction to Data Science: Data Analysis and Prediction Algorithms with R https://rafalab.dfci.harvard.edu/dsbook/
+
+Irizarry, Rafael A., Introduction to Data Science: Statistics and Prediction Algorithms Through Case Studies https://rafalab.dfci.harvard.edu/dsbook-part-2/
+
+https://www.kaggle.com/datasets/uciml/adult-census-income
